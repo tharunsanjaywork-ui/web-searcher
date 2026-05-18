@@ -17,6 +17,9 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 USERS_FILE = os.path.join(os.path.dirname(__file__), "users.json")
+# On Render, use persistent disk so users survive redeploys
+if os.path.isdir("/data"):
+    USERS_FILE = "/data/users.json"
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_hex(32))
 
 
