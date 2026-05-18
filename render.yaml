@@ -1,0 +1,21 @@
+# Render deployment configuration for SearchMind
+# 
+# IMPORTANT: Set these environment variables in the Render dashboard:
+#   - TAVILY_API_KEY
+#   - GOOGLE_API_KEY
+#   - CHROMA_PATH=/data/chroma_db
+# Do NOT put actual API key values in this file.
+
+services:
+  - type: web
+    name: searchmind
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+    disk:
+      name: searchmind-data
+      mountPath: /data
+      sizeGB: 1

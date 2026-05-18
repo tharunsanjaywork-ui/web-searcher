@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SearchMind — Ask anything. Search the web. Get verified answers.</title>
+    <meta name="description" content="SearchMind: AI-powered web search with verified answers.">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        code, pre { font-family: 'JetBrains Mono', monospace; }
+        body { background: #0f0f0f; color: #f0f0f0; margin: 0; overflow: hidden; height: 100vh; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #2e2e2e; border-radius: 3px; }
+        .sidebar { width: 260px; min-width: 260px; background: #1a1a1a; border-right: 1px solid #2e2e2e; display: flex; flex-direction: column; height: 100vh; }
+        .chat-item { padding: 10px 16px; cursor: pointer; border-radius: 8px; margin: 2px 8px; font-size: 14px; color: #8a8a8a; transition: all 0.15s; border-left: 3px solid transparent; }
+        .chat-item:hover { background: #242424; color: #f0f0f0; }
+        .chat-item.active { background: #2e2e2e; color: #f0f0f0; border-left-color: #7c6af7; }
+        .main-area { flex: 1; display: flex; flex-direction: column; height: 100vh; position: relative; }
+        .chat-thread { flex: 1; overflow-y: auto; padding: 24px 0; }
+        .input-bar { border-top: 1px solid #2e2e2e; background: #1a1a1a; padding: 16px 24px; }
+        .user-bubble { background: #1e1b4b; border-radius: 20px; padding: 12px 18px; max-width: 70%; margin-left: auto; }
+        .ai-card { background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 12px; padding: 20px; max-width: 85%; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+        .source-chip { display: inline-flex; align-items: center; gap: 6px; background: #242424; border: 1px solid #2e2e2e; border-radius: 8px; padding: 6px 12px; font-size: 12px; color: #8a8a8a; text-decoration: none; transition: all 0.15s; white-space: nowrap; }
+        .source-chip:hover { background: #2e2e2e; color: #f0f0f0; }
+        .sources-row { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; }
+        .confidence-badge { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+        .typing-dot { width: 8px; height: 8px; border-radius: 50%; background: #7c6af7; animation: bounce 1.4s infinite; }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes bounce { 0%,80%,100% { transform: translateY(0); } 40% { transform: translateY(-8px); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: fadeIn 0.3s ease-out; }
+        .btn-accent { background: #7c6af7; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
+        .btn-accent:hover { background: #6a58e0; }
+        .btn-accent:disabled { opacity: 0.5; cursor: not-allowed; }
+        textarea { background: #242424; border: 1px solid #2e2e2e; border-radius: 12px; color: #f0f0f0; resize: none; outline: none; font-size: 15px; line-height: 1.7; }
+        textarea:focus { border-color: #7c6af7; }
+        .error-card { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; border-radius: 12px; padding: 16px; color: #ef4444; }
+        .auth-input { width: 100%; padding: 12px 16px; background: #242424; border: 1px solid #2e2e2e; border-radius: 8px; color: #f0f0f0; font-size: 15px; outline: none; transition: border-color 0.15s; }
+        .auth-input:focus { border-color: #7c6af7; }
+        .auth-input::placeholder { color: #8a8a8a; }
+        @media (max-width: 768px) {
+            .sidebar { position: fixed; left: -260px; z-index: 50; transition: left 0.3s; }
+            .sidebar.open { left: 0; }
+            .mobile-toggle { display: flex !important; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- AUTH SCREEN -->
+<div id="authScreen" class="flex items-center justify-center h-screen">
+    <div class="w-full max-w-md px-6">
+        <div class="text-center mb-8">
+            <div class="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style="background:linear-gradient(135deg,#7c6af7,#6a58e0);">
+                <span class="text-white text-2xl font-bold">S</span>
+            </div>
+            <h1 class="text-2xl font-semibold mb-1">SearchMind</h1>
+            <p style="color:#8a8a8a;font-size:14px;">Ask anything. Search the web. Get verified answers.</p>
+        </div>
+
+        <div style="background:#1a1a1a;border:1px solid #2e2e2e;border-radius:12px;padding:28px;">
+            <h2 id="authTitle" class="text-lg font-semibold mb-5">Sign In</h2>
+            <div id="authError" class="hidden mb-4 p-3 rounded-lg" style="background:rgba(239,68,68,0.1);border:1px solid #ef4444;color:#ef4444;font-size:13px;"></div>
+
+            <div class="mb-4">
+                <label class="block text-sm mb-2" style="color:#8a8a8a;">Email</label>
+                <input id="authEmail" type="email" placeholder="you@example.com" class="auth-input" autocomplete="email">
+            </div>
+            <div class="mb-6">
+                <label class="block text-sm mb-2" style="color:#8a8a8a;">Password</label>
+                <input id="authPassword" type="password" placeholder="••••••••" class="auth-input" autocomplete="current-password">
+            </div>
+
+            <button id="authSubmitBtn" class="btn-accent w-full py-3 text-sm font-medium" onclick="handleAuth()">Sign In</button>
+
+            <p class="text-center mt-5" style="font-size:13px;color:#8a8a8a;">
+                <span id="authToggleText">Don't have an account?</span>
+                <button id="authToggleBtn" onclick="toggleAuthMode()" style="color:#7c6af7;background:none;border:none;cursor:pointer;font-size:13px;font-weight:500;"> Sign Up</button>
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- MAIN APP (hidden until logged in) -->
+<div id="appScreen" class="hidden flex h-screen">
+    <aside class="sidebar" id="sidebar">
+        <div class="p-4 border-b" style="border-color:#2e2e2e;">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background:#7c6af7;">
+                        <span class="text-white text-sm font-bold">S</span>
+                    </div>
+                    <h1 class="text-lg font-semibold" style="color:#f0f0f0;">SearchMind</h1>
+                </div>
+                <button onclick="handleLogout()" title="Sign out" style="color:#8a8a8a;background:none;border:none;cursor:pointer;" aria-label="Sign out">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                </button>
+            </div>
+            <button id="newChatBtn" class="btn-accent w-full py-2.5 px-4 text-sm font-medium flex items-center justify-center gap-2" aria-label="Start new chat">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New Chat
+            </button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-2" id="historyList"></div>
+        <div class="p-3 border-t" style="border-color:#2e2e2e;">
+            <div id="userInfo" class="text-xs truncate" style="color:#8a8a8a;"></div>
+        </div>
+    </aside>
+
+    <main class="main-area">
+        <button class="mobile-toggle hidden fixed top-3 left-3 z-50 p-2 rounded-lg" style="background:#1a1a1a;border:1px solid #2e2e2e;" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="Toggle sidebar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f0f0f0" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+
+        <div id="welcomeScreen" class="flex-1 flex items-center justify-center">
+            <div class="text-center max-w-lg px-6">
+                <div class="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6" style="background:linear-gradient(135deg,#7c6af7,#6a58e0);">
+                    <span class="text-white text-2xl font-bold">S</span>
+                </div>
+                <h2 class="text-2xl font-semibold mb-2">Welcome to SearchMind</h2>
+                <p class="mb-8" style="color:#8a8a8a;font-size:15px;line-height:1.7;">Ask anything. Search the web. Get verified answers.</p>
+                <div class="flex flex-col gap-3">
+                    <button class="suggestion-btn text-left p-4 rounded-xl transition-all" style="background:#1a1a1a;border:1px solid #2e2e2e;color:#f0f0f0;font-size:14px;" onmouseover="this.style.borderColor='#7c6af7'" onmouseout="this.style.borderColor='#2e2e2e'" onclick="useSuggestion(this.textContent)">What are the latest breakthroughs in AI?</button>
+                    <button class="suggestion-btn text-left p-4 rounded-xl transition-all" style="background:#1a1a1a;border:1px solid #2e2e2e;color:#f0f0f0;font-size:14px;" onmouseover="this.style.borderColor='#7c6af7'" onmouseout="this.style.borderColor='#2e2e2e'" onclick="useSuggestion(this.textContent)">Explain quantum computing in simple terms</button>
+                    <button class="suggestion-btn text-left p-4 rounded-xl transition-all" style="background:#1a1a1a;border:1px solid #2e2e2e;color:#f0f0f0;font-size:14px;" onmouseover="this.style.borderColor='#7c6af7'" onmouseout="this.style.borderColor='#2e2e2e'" onclick="useSuggestion(this.textContent)">What is the current state of space exploration?</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="chatThread" class="chat-thread hidden">
+            <div id="messages" class="max-w-3xl mx-auto px-6"></div>
+        </div>
+
+        <div class="input-bar">
+            <div class="max-w-3xl mx-auto flex gap-3 items-end">
+                <textarea id="messageInput" rows="1" placeholder="Ask anything..." class="flex-1 py-3 px-4" style="min-height:48px;max-height:120px;" oninput="autoResize(this)"></textarea>
+                <button id="sendBtn" class="btn-accent p-3 flex items-center justify-center" style="min-width:48px;min-height:48px;" aria-label="Send message" onclick="sendMessage()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                </button>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script>
+// --- State ---
+let authToken = localStorage.getItem('sm_token') || '';
+let userEmail = localStorage.getItem('sm_email') || '';
+let currentSessionId = crypto.randomUUID();
+let isLoading = false;
+let typingInterval = null;
+let isLoginMode = true;
+
+// --- DOM refs ---
+const authScreen = document.getElementById('authScreen');
+const appScreen = document.getElementById('appScreen');
+const welcomeScreen = document.getElementById('welcomeScreen');
+const chatThread = document.getElementById('chatThread');
+const msgContainer = document.getElementById('messages');
+const messageInput = document.getElementById('messageInput');
+const sendBtn = document.getElementById('sendBtn');
+const historyList = document.getElementById('historyList');
+const newChatBtn = document.getElementById('newChatBtn');
+
+// --- Init ---
+window.addEventListener('DOMContentLoaded', async () => {
+    messageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    });
+    newChatBtn.addEventListener('click', startNewChat);
+    document.getElementById('authPassword').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleAuth();
+    });
+
+    if (authToken) {
+        const valid = await verifyToken();
+        if (valid) { showApp(); return; }
+    }
+    showAuth();
+});
+
+function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+// --- Auth ---
+function showAuth() {
+    authScreen.classList.remove('hidden');
+    appScreen.classList.add('hidden');
+}
+
+function showApp() {
+    authScreen.classList.add('hidden');
+    appScreen.classList.remove('hidden');
+    document.getElementById('userInfo').textContent = userEmail;
+    loadHistory();
+}
+
+function toggleAuthMode() {
+    isLoginMode = !isLoginMode;
+    document.getElementById('authTitle').textContent = isLoginMode ? 'Sign In' : 'Create Account';
+    document.getElementById('authSubmitBtn').textContent = isLoginMode ? 'Sign In' : 'Create Account';
+    document.getElementById('authToggleText').textContent = isLoginMode ? "Don't have an account?" : 'Already have an account?';
+    document.getElementById('authToggleBtn').textContent = isLoginMode ? ' Sign Up' : ' Sign In';
+    document.getElementById('authError').classList.add('hidden');
+}
+
+async function handleAuth() {
+    const email = document.getElementById('authEmail').value.trim();
+    const password = document.getElementById('authPassword').value;
+    const errEl = document.getElementById('authError');
+
+    if (!email || !password) {
+        errEl.textContent = 'Please enter email and password.';
+        errEl.classList.remove('hidden');
+        return;
+    }
+
+    const url = isLoginMode ? '/api/login' : '/api/register';
+    try {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        });
+        const data = await resp.json();
+
+        if (data.success && data.data) {
+            authToken = data.data.token;
+            userEmail = data.data.email;
+            localStorage.setItem('sm_token', authToken);
+            localStorage.setItem('sm_email', userEmail);
+            errEl.classList.add('hidden');
+            showApp();
+        } else {
+            errEl.textContent = data.error || 'Authentication failed.';
+            errEl.classList.remove('hidden');
+        }
+    } catch (e) {
+        errEl.textContent = 'Connection error. Please try again.';
+        errEl.classList.remove('hidden');
+    }
+}
+
+async function verifyToken() {
+    try {
+        const resp = await fetch('/api/verify', { headers: authHeaders() });
+        const data = await resp.json();
+        return data.success === true;
+    } catch { return false; }
+}
+
+function handleLogout() {
+    authToken = '';
+    userEmail = '';
+    localStorage.removeItem('sm_token');
+    localStorage.removeItem('sm_email');
+    currentSessionId = crypto.randomUUID();
+    msgContainer.innerHTML = '';
+    historyList.innerHTML = '';
+    showAuth();
+}
+
+function authHeaders() {
+    return { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' };
+}
+
+// --- API helpers ---
+async function apiPost(url, body) {
+    const res = await fetch(url, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+    return res.json();
+}
+async function apiGet(url) {
+    const res = await fetch(url, { headers: authHeaders() });
+    return res.json();
+}
+
+// --- History ---
+async function loadHistory() {
+    try {
+        const resp = await apiGet('/api/history');
+        if (!resp.success || !resp.data) return;
+        renderHistoryList(resp.data);
+    } catch (e) { /* silently fail */ }
+}
+
+function renderHistoryList(sessions) {
+    historyList.innerHTML = '';
+    if (!sessions || sessions.length === 0) return;
+    sessions.forEach(s => {
+        const div = document.createElement('div');
+        div.className = 'chat-item' + (s.session_id === currentSessionId ? ' active' : '');
+        div.textContent = s.preview || 'New chat';
+        div.onclick = () => loadSession(s.session_id);
+        historyList.appendChild(div);
+    });
+}
+
+async function loadSession(sessionId) {
+    currentSessionId = sessionId;
+    try {
+        const resp = await apiGet(`/api/history/${sessionId}`);
+        if (!resp.success || !resp.data || resp.data.length === 0) {
+            showWelcome(); loadHistory(); return;
+        }
+        showChatThread();
+        msgContainer.innerHTML = '';
+        resp.data.forEach(msg => {
+            if (msg.role === 'user') appendUserBubble(msg.content);
+            else renderResponseCard({ summary: msg.content, sources: msg.sources || [], confidence: msg.confidence || 'medium' });
+        });
+        scrollToBottom();
+        loadHistory();
+    } catch (e) { showErrorCard('Failed to load chat history.'); }
+}
+
+// --- New Chat ---
+async function startNewChat() {
+    currentSessionId = crypto.randomUUID();
+    showWelcome();
+    loadHistory();
+    try { await apiPost('/api/new-session', { session_id: currentSessionId }); } catch (e) { /* ok */ }
+}
+
+// --- Send Message ---
+async function sendMessage() {
+    const text = messageInput.value.trim();
+    if (!text || isLoading) return;
+
+    isLoading = true;
+    sendBtn.disabled = true;
+    messageInput.value = '';
+    messageInput.style.height = 'auto';
+
+    showChatThread();
+    appendUserBubble(text);
+    showTypingIndicator();
+
+    try {
+        const resp = await apiPost('/api/chat', { message: text, session_id: currentSessionId });
+        removeTypingIndicator();
+        if (resp.success && resp.data) {
+            renderResponseCard(resp.data);
+        } else {
+            showErrorCard(resp.error || 'Something went wrong.');
+        }
+    } catch (e) {
+        removeTypingIndicator();
+        showErrorCard('Connection lost. Check your internet.');
+    }
+
+    isLoading = false;
+    sendBtn.disabled = false;
+    scrollToBottom();
+    loadHistory();
+}
+
+function useSuggestion(text) { messageInput.value = text; sendMessage(); }
+
+// --- UI helpers ---
+function showWelcome() { welcomeScreen.classList.remove('hidden'); chatThread.classList.add('hidden'); msgContainer.innerHTML = ''; }
+function showChatThread() { welcomeScreen.classList.add('hidden'); chatThread.classList.remove('hidden'); }
+
+function appendUserBubble(text) {
+    const div = document.createElement('div');
+    div.className = 'flex justify-end mb-4 animate-in';
+    div.innerHTML = `<div class="user-bubble"><p style="font-size:15px;line-height:1.7;">${escapeHtml(text)}</p></div>`;
+    msgContainer.appendChild(div);
+    scrollToBottom();
+}
+
+function renderResponseCard(data) {
+    const div = document.createElement('div');
+    div.className = 'flex justify-start mb-6 animate-in';
+    const summaryHtml = escapeHtml(data.summary || '').replace(/\n/g, '<br>');
+    const sourcesHtml = buildSourcesHtml(data.sources || []);
+    const badgeHtml = buildBadgeHtml(data.confidence || 'medium');
+    div.innerHTML = `
+        <div class="ai-card">
+            <div style="font-size:15px;line-height:1.7;color:#f0f0f0;margin-bottom:16px;">${summaryHtml}</div>
+            ${sourcesHtml ? `<div style="border-top:1px solid #2e2e2e;padding-top:12px;margin-bottom:12px;"><p style="font-size:12px;color:#8a8a8a;margin-bottom:8px;font-weight:500;">Sources</p><div class="sources-row">${sourcesHtml}</div></div>` : ''}
+            <div style="border-top:1px solid #2e2e2e;padding-top:12px;">${badgeHtml}</div>
+        </div>`;
+    msgContainer.appendChild(div);
+    scrollToBottom();
+}
+
+function buildSourcesHtml(sources) {
+    if (!sources || sources.length === 0) return '';
+    return sources.map(s => {
+        const domain = getDomain(s.url || '');
+        const favicon = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
+        return `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener" class="source-chip"><img src="${favicon}" width="14" height="14" alt="" style="border-radius:2px;">${escapeHtml(domain)}</a>`;
+    }).join('');
+}
+
+function buildBadgeHtml(confidence) {
+    const map = { high: { bg: '#22c55e', text: '✅ High Confidence' }, medium: { bg: '#f59e0b', text: '⚠️ Medium Confidence' }, low: { bg: '#ef4444', text: '❌ Low Confidence' } };
+    const c = map[confidence] || map.medium;
+    return `<span class="confidence-badge" style="background:${c.bg}20;color:${c.bg};">${c.text}</span>`;
+}
+
+function showTypingIndicator() {
+    removeTypingIndicator();
+    const div = document.createElement('div');
+    div.id = 'typingIndicator';
+    div.className = 'flex justify-start mb-4 animate-in';
+    div.innerHTML = `<div class="ai-card" style="display:flex;align-items:center;gap:12px;"><div style="display:flex;gap:4px;"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div><span id="typingLabel" style="font-size:14px;color:#8a8a8a;">🔍 Searching the web...</span></div>`;
+    msgContainer.appendChild(div);
+    scrollToBottom();
+    let stage = 0;
+    typingInterval = setInterval(() => {
+        stage++;
+        const label = document.getElementById('typingLabel');
+        if (!label) { clearInterval(typingInterval); return; }
+        if (stage === 1) label.textContent = '📝 Summarizing results...';
+        if (stage === 2) { label.textContent = '✅ Validating answer...'; clearInterval(typingInterval); }
+    }, 2500);
+}
+
+function removeTypingIndicator() {
+    if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
+    const el = document.getElementById('typingIndicator');
+    if (el) el.remove();
+}
+
+function showErrorCard(msg) {
+    const div = document.createElement('div');
+    div.className = 'flex justify-start mb-4 animate-in';
+    div.innerHTML = `<div class="error-card"><p style="font-size:14px;">${escapeHtml(msg)}</p></div>`;
+    msgContainer.appendChild(div);
+    scrollToBottom();
+}
+
+function scrollToBottom() { chatThread.scrollTop = chatThread.scrollHeight; }
+
+function escapeHtml(str) {
+    if (!str) return '';
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+
+function getDomain(url) {
+    try { return new URL(url).hostname.replace('www.', ''); } catch { return url; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Environment variables (NEVER commit this)
+.env
+
+# User credentials database
+users.json
+
+# ChromaDB persistent data
+chroma_db/
+
+# Python virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
