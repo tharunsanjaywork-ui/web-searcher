@@ -1,15 +1,14 @@
 """
 SearchMind — Agent Pipeline
 Four-step system: Reformulate → Search → Summarize → Validate
-Uses Tavily for web search and Google Gemini 2.5 Flash for LLM calls.
+Uses Tavily for web search and DeepSeek v4 Pro (via NVIDIA) for LLM calls.
 """
 
 import os
 import logging
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
 from memory import get_memory_context, get_session_history, save_message
 
 load_dotenv()
@@ -17,7 +16,33 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
+
+# DeepSeek v4 Pro via NVIDIA
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+LLM_MODEL = "deepseek-ai/deepseek-v4-pro"
+
+
+def _get_llm_client():
+    """Create async OpenAI client pointing to NVIDIA API."""
+    return AsyncOpenAI(
+        base_url=NVIDIA_BASE_URL,
+        api_key=NVIDIA_API_KEY,
+    )
+
+
+async def _llm_call(prompt, temperature=0.3):
+    """Call DeepSeek v4 Pro via NVIDIA API."""
+    client = _get_llm_client()
+    response = await client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+        top_p=0.95,
+        max_tokens=4096,
+        extra_body={"chat_template_kwargs": {"thinking": False}},
+    )
+    return response.choices[0].message.content
 
 
 # --- Step 0: Query Reformulator ---
@@ -48,24 +73,18 @@ async def reformulate_query(message, session_id, user_id):
 
         history_text = _format_conversation_history(history)
 
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=GOOGLE_API_KEY,
-            temperature=0.1,
-        )
-
         prompt = REFORMULATE_PROMPT.format(
             conversation_history=history_text,
             message=message,
         )
 
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        result = await _llm_call(prompt, temperature=0.1)
 
-        if not response or not response.content:
+        if not result:
             return message
 
-        reformulated = response.content.strip().strip('"')
-        logger.info(f"Reformulated: '{message}' → '{reformulated}'")
+        reformulated = result.strip().strip('"')
+        logger.info(f"Reformulated: '{message}' -> '{reformulated}'")
         return reformulated
     except Exception as e:
         logger.error(f"Query reformulation failed: {e}")
@@ -94,6 +113,9 @@ def _format_conversation_history(history):
 async def search_agent(query):
     """Search the web using Tavily."""
     try:
+        if not TAVILY_API_KEY:
+            raise Exception("TAVILY_API_KEY is not set")
+
         search_tool = TavilySearchResults(
             max_results=5,
             tavily_api_key=TAVILY_API_KEY
@@ -117,6 +139,8 @@ async def search_agent(query):
                 "url": item.get("url", ""),
                 "content": item.get("content", ""),
             })
+
+        logger.info(f"Search returned {len(results)} results for: {query}")
         return results
     except Exception as e:
         logger.error(f"Search agent failed: {e}")
@@ -149,14 +173,8 @@ Output only the summary. No preamble."""
 
 async def summarizer_agent(query, original_message, search_results,
                            memory_context):
-    """Summarize search results using Gemini 2.5 Flash."""
+    """Summarize search results using DeepSeek v4 Pro."""
     try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=GOOGLE_API_KEY,
-            temperature=0.3,
-        )
-
         formatted_results = _format_search_results(search_results)
         context = memory_context if memory_context else "No previous context."
 
@@ -167,16 +185,12 @@ async def summarizer_agent(query, original_message, search_results,
             search_results=formatted_results,
         )
 
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        result = await _llm_call(prompt, temperature=0.3)
 
-        if not response or not response.content:
-            logger.warning("Gemini returned empty, retrying...")
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
-
-        if not response or not response.content:
+        if not result:
             raise Exception("Summarization returned empty response")
 
-        return response.content
+        return result
     except Exception as e:
         logger.error(f"Summarizer agent failed: {e}")
         raise Exception(f"Summarization failed: {e}")
@@ -220,21 +234,15 @@ REASON: [one sentence explaining the confidence level]"""
 
 
 async def validator_agent(query, summary):
-    """Validate summary using Gemini 2.5 Flash."""
+    """Validate summary using DeepSeek v4 Pro."""
     try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=GOOGLE_API_KEY,
-            temperature=0.2,
-        )
-
         prompt = VALIDATOR_PROMPT.format(query=query, summary=summary)
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        result = await _llm_call(prompt, temperature=0.2)
 
-        if not response or not response.content:
+        if not result:
             return _fallback_validation(summary)
 
-        return _parse_validation(response.content, summary)
+        return _parse_validation(result, summary)
     except Exception as e:
         logger.error(f"Validator agent failed: {e}")
         return _fallback_validation(summary)

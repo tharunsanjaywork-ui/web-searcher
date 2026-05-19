@@ -1,10 +1,10 @@
 fastapi
 uvicorn
-langchain
-langchain-google-genai
-langchain-community
 chromadb
+langchain
+langchain-community
 python-dotenv
 pydantic
 tavily-python
 PyJWT
+openai
