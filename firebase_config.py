@@ -58,14 +58,14 @@ def initialize_firebase():
                     cred_json_clean += '=' * (4 - missing_padding)
                 
                 decoded_bytes = base64.b64decode(cred_json_clean)
-                cred_data = json.loads(decoded_bytes.decode('utf-8'))
+                cred_data = json.loads(decoded_bytes.decode('utf-8'), strict=False)
             except Exception as e:
                 b64_err = e
 
             # 2. Try to parse as raw JSON directly
             if cred_data is None:
                 try:
-                    cred_data = json.loads(cred_json)
+                    cred_data = json.loads(cred_json, strict=False)
                 except Exception as e:
                     raw_err = e
 
