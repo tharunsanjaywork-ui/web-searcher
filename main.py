@@ -10,16 +10,37 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import BaseHTTPMiddleware
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from memory import initialize_chroma_client
-initialize_chroma_client()
+from memory import initialize_firebase
+initialize_firebase()
 
 app = FastAPI(title="SearchMind", version="1.0.0")
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -60,6 +81,7 @@ async def serve_index():
 # --- Auth Routes ---
 
 @app.post("/api/register")
+@limiter.limit("3/minute")
 async def register_route(request: Request):
     try:
         body = await request.json()
@@ -80,6 +102,7 @@ async def register_route(request: Request):
 
 
 @app.post("/api/login")
+@limiter.limit("5/minute")
 async def login_route(request: Request):
     try:
         body = await request.json()
@@ -110,6 +133,7 @@ async def verify_route(request: Request):
 # --- Chat Routes ---
 
 @app.post("/api/chat")
+@limiter.limit("20/minute")
 async def chat(request: Request):
     try:
         user_id = _get_user_id(request)
@@ -122,6 +146,8 @@ async def chat(request: Request):
 
         if not message:
             return error_response("Message is required", 400)
+        if len(message) > 2000:
+            return error_response("Message too long. Maximum 2000 characters.", 400)
         if not session_id:
             return error_response("session_id is required", 400)
 

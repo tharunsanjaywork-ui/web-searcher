@@ -1,15 +1,16 @@
 # Technical Requirements Document
 
 ## Why This Stack (Read This First)
-FastAPI is chosen because the three-agent pipeline is async by nature — each agent
-call (Tavily search, Gemini summarize, Gemini validate) is a network request that
-benefits from async handling. FastAPI is the best Python framework for this.
-LangChain is chosen because it has native Tavily integration, built-in memory
-abstractions, and clean chain composition for multi-agent flows. Gemini 2.5 Flash
-is chosen for summarization and validation because it is fast, handles long context
-(full web search results) well, and has a generous free tier. ChromaDB is chosen
-for cross-session memory because it runs embedded (no separate server), persists
-to disk on Render, and integrates directly with LangChain memory.
+FastAPI is chosen because the four-agent pipeline is async by nature — each agent
+call (reformulate, Tavily search, DeepSeek summarize, DeepSeek validate) is a
+network request that benefits from async handling. FastAPI is the best Python
+framework for this. LangChain is chosen because it has native Tavily integration
+and clean chain composition for multi-agent flows. DeepSeek v4 Pro (via NVIDIA
+API) is chosen for summarization and validation because it is fast, handles long
+context (full web search results) well, and is accessed through an OpenAI-compatible
+endpoint. Firebase Firestore is chosen for cross-session memory and user storage
+because it is fully managed, requires no infrastructure, and persists data in the
+cloud across deployments.
 
 ## Frontend
 - Framework: Pure HTML + Tailwind CSS (CDN) + Vanilla JavaScript
@@ -29,24 +30,28 @@ to disk on Render, and integrates directly with LangChain memory.
   - Output: raw web search results (list of title + url + content)
 
 - Agent 2 — Summarizer Agent
-  - LLM: Google Gemini 2.5 Flash via langchain-google-genai
+  - LLM: DeepSeek v4 Pro via NVIDIA API (OpenAI-compatible endpoint)
   - Input: raw search results + summarization prompt
   - Output: clean structured summary
 
 - Agent 3 — Validator Agent
-  - LLM: Google Gemini 2.5 Flash via langchain-google-genai
+  - LLM: DeepSeek v4 Pro via NVIDIA API (OpenAI-compatible endpoint)
   - Input: summary + validation prompt
   - Output: validated summary + confidence level (high / medium / low)
 
 ## Database / Memory
-- Provider: ChromaDB (embedded, persistent)
-- Purpose: Store all user messages and AI responses as vectors
-- Embedding model: Google Generative AI Embeddings (models/embedding-001)
-- LangChain integration: ConversationSummaryBufferMemory + Chroma vectorstore
-- Persistence path: ./chroma_db (mapped to Render persistent disk)
+- Provider: Firebase Firestore (cloud-hosted)
+- Purpose: Store all user messages, AI responses, and user accounts
+- Collections: chat_messages (conversations), users (authentication)
+- No local disk persistence needed — all data lives in Firebase
+- Memory context: retrieves last 5 messages from session (chronological)
 
 ## Authentication
-- None in v1 — single user app
+- Email/password registration and login
+- Password hashing: bcrypt
+- Token format: JWT (PyJWT) with HS256 algorithm
+- User storage: Firebase Firestore "users" collection
+- All API routes require Bearer token in Authorization header
 
 ## File Storage
 - None required
@@ -58,21 +63,27 @@ to disk on Render, and integrates directly with LangChain memory.
 
 ## Environment Variables
 - TAVILY_API_KEY — Tavily web search API key
-- GOOGLE_API_KEY — Google Gemini API key
-- CHROMA_PATH — path to ChromaDB storage (default: ./chroma_db locally, /data/chroma_db on Render)
+- NVIDIA_API_KEY — NVIDIA API key (for DeepSeek v4 Pro)
+- SECRET_KEY — JWT signing key (minimum 32 characters)
+- FIREBASE_CREDENTIALS_PATH — path to Firebase service account JSON (local dev)
+- FIREBASE_CREDENTIALS_JSON — base64-encoded service account JSON (cloud deploy)
 
 ## Key Libraries
 - fastapi — web framework
 - uvicorn — ASGI server
-- langchain — agent orchestration and memory
-- langchain-google-genai — Gemini LLM and embeddings
+- langchain — agent orchestration
+- langchain-openai — OpenAI-compatible LLM client
 - langchain-community — TavilySearchResults tool
-- chromadb — vector database for memory
+- openai — async client for NVIDIA/DeepSeek API
+- firebase-admin — Firebase Firestore client
 - python-dotenv — environment variable loading
 - pydantic — request/response validation
+- PyJWT — JWT token creation and verification
+- bcrypt — password hashing
+- slowapi — API rate limiting
 
 ## Hard Constraints
-- Free tier only on Render
-- No paid embedding API (use Google's free embedding model)
-- No authentication in v1
+- Free tier on Render / HF Spaces
+- Firebase Spark (free tier) for Firestore
+- JWT-based authentication (email/password)
 - Must work in Antigravity without a build step

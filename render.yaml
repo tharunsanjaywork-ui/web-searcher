@@ -2,8 +2,9 @@
 # 
 # IMPORTANT: Set these environment variables in the Render dashboard:
 #   - TAVILY_API_KEY
-#   - GOOGLE_API_KEY
-#   - CHROMA_PATH=/data/chroma_db
+#   - NVIDIA_API_KEY
+#   - SECRET_KEY
+#   - FIREBASE_CREDENTIALS_JSON (Base64-encoded service account key)
 # Do NOT put actual API key values in this file.
 
 services:
@@ -15,7 +16,4 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
-    disk:
-      name: searchmind-data
-      mountPath: /data
-      sizeGB: 1
+

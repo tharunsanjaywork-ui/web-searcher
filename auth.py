@@ -1,79 +1,73 @@
 """
 SearchMind — Authentication Module
-Simple email/password auth with JWT tokens and JSON file storage.
+Email/password auth with JWT tokens and Firebase Firestore storage.
+Uses bcrypt for password hashing (replaces SHA-256).
 """
 
 import os
-import json
-import hashlib
-import secrets
 import logging
+import secrets
 from datetime import datetime, timezone
 import jwt
+import bcrypt
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-USERS_FILE = os.path.join(os.path.dirname(__file__), "users.json")
-# On Render, use persistent disk so users survive redeploys
-if os.path.isdir("/data"):
-    USERS_FILE = "/data/users.json"
-SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_hex(32))
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if len(SECRET_KEY) < 32:
+    raise RuntimeError(
+        "SECRET_KEY must be at least 32 characters long. "
+        "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+
+USERS_COLLECTION = "users"
 
 
-def _load_users():
-    """Load users from JSON file."""
-    try:
-        if not os.path.exists(USERS_FILE):
-            return {}
-        with open(USERS_FILE, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load users: {e}")
-        return {}
+def _get_db():
+    """Get Firestore client from shared config."""
+    from firebase_config import get_db
+    return get_db()
 
 
-def _save_users(users):
-    """Save users to JSON file."""
-    try:
-        with open(USERS_FILE, "w") as f:
-            json.dump(users, f, indent=2)
-    except Exception as e:
-        logger.error(f"Failed to save users: {e}")
+def _hash_password(password):
+    """Hash password using bcrypt."""
+    return bcrypt.hashpw(
+        password.encode("utf-8"), bcrypt.gensalt()
+    ).decode("utf-8")
 
 
-def _hash_password(password, salt=None):
-    """Hash password with SHA-256 and salt."""
-    if salt is None:
-        salt = secrets.token_hex(16)
-    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
-    return salt, hashed
+def _verify_password(password, hashed):
+    """Verify password against bcrypt hash."""
+    return bcrypt.checkpw(
+        password.encode("utf-8"), hashed.encode("utf-8")
+    )
 
 
 def register(email, password):
-    """Register a new user. Returns (data, error)."""
+    """Register a new user in Firestore. Returns (data, error)."""
     try:
-        users = _load_users()
+        db = _get_db()
         email = email.strip().lower()
 
-        if email in users:
+        # Check if user already exists
+        doc = db.collection(USERS_COLLECTION).document(email).get()
+        if doc.exists:
             return None, "Email already registered"
 
         if len(password) < 6:
             return None, "Password must be at least 6 characters"
 
-        salt, hashed = _hash_password(password)
         user_id = secrets.token_hex(8)
+        password_hash = _hash_password(password)
 
-        users[email] = {
+        db.collection(USERS_COLLECTION).document(email).set({
             "user_id": user_id,
-            "salt": salt,
-            "password_hash": hashed,
+            "password_hash": password_hash,
             "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        _save_users(users)
+        })
 
         token = _create_token(user_id, email)
         return {"token": token, "user_id": user_id, "email": email}, None
@@ -83,22 +77,25 @@ def register(email, password):
 
 
 def login(email, password):
-    """Login user. Returns (data, error)."""
+    """Login user from Firestore. Returns (data, error)."""
     try:
-        users = _load_users()
+        db = _get_db()
         email = email.strip().lower()
 
-        if email not in users:
+        doc = db.collection(USERS_COLLECTION).document(email).get()
+        if not doc.exists:
             return None, "Invalid email or password"
 
-        user = users[email]
-        _, hashed = _hash_password(password, user["salt"])
-
-        if hashed != user["password_hash"]:
+        user_data = doc.to_dict()
+        if not _verify_password(password, user_data["password_hash"]):
             return None, "Invalid email or password"
 
-        token = _create_token(user["user_id"], email)
-        return {"token": token, "user_id": user["user_id"], "email": email}, None
+        token = _create_token(user_data["user_id"], email)
+        return {
+            "token": token,
+            "user_id": user_data["user_id"],
+            "email": email,
+        }, None
     except Exception as e:
         logger.error(f"Login failed: {e}")
         return None, "Login failed"
@@ -115,5 +112,10 @@ def verify_token(token):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         return payload
+    except jwt.ExpiredSignatureError:
+        return None
     except jwt.InvalidTokenError:
+        return None
+    except Exception as e:
+        logger.error(f"Token verification unexpected error: {e}")
         return None

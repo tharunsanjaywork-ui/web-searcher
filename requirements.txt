@@ -1,10 +1,13 @@
 fastapi
-uvicorn
-chromadb
+uvicorn[standard]
 langchain
 langchain-community
+langchain-openai
 python-dotenv
 pydantic
 tavily-python
 PyJWT
 openai
+bcrypt
+slowapi
+firebase-admin

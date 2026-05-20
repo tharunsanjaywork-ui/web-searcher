@@ -1,74 +1,53 @@
 """
-SearchMind — ChromaDB Memory Layer
-Persistent cross-session memory with per-user data isolation.
+SearchMind — Firebase Memory Layer
+Persistent cross-session memory with per-user data isolation using Firestore.
+Replaces ChromaDB with Firebase Firestore for cloud-native storage.
 """
 
-import os
 import json
 import uuid
 import logging
 from datetime import datetime, timezone
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
-
-_chroma_client = None
-_collection = None
+MESSAGES_COLLECTION = "chat_messages"
 
 
-def initialize_chroma_client():
-    """Create persistent ChromaDB client and collection."""
-    global _chroma_client, _collection
-    try:
-        import chromadb
-        _chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-        _collection = _chroma_client.get_or_create_collection(
-            name="chat_messages"
-        )
-        logger.info(f"ChromaDB initialized at {CHROMA_PATH}")
-        return _collection
-    except Exception as e:
-        logger.error(f"ChromaDB initialization failed: {e}")
-        return None
+def _get_db():
+    """Get Firestore client from shared config."""
+    from firebase_config import get_db
+    return get_db()
 
 
-def _get_collection():
-    """Get or initialize the ChromaDB collection."""
-    global _collection
-    if _collection is None:
-        initialize_chroma_client()
-    return _collection
+def initialize_firebase():
+    """Initialize Firebase (called from main.py at startup)."""
+    from firebase_config import initialize_firebase as _init
+    _init()
 
 
 def save_message(session_id, user_id, role, message_text,
                  sources=None, confidence=None):
-    """Save a message with user_id for per-user isolation."""
+    """Save a message to Firestore with full metadata."""
     try:
-        collection = _get_collection()
-        if collection is None:
+        db = _get_db()
+        if db is None:
             return False
 
         message_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
 
-        metadata = {
+        doc_data = {
             "session_id": session_id,
             "user_id": user_id,
             "role": role,
+            "content": message_text,
             "timestamp": timestamp,
             "sources": json.dumps(sources) if sources else "[]",
             "confidence": confidence if confidence else "",
         }
 
-        collection.add(
-            ids=[message_id],
-            documents=[message_text],
-            metadatas=[metadata]
-        )
+        db.collection(MESSAGES_COLLECTION).document(message_id).set(doc_data)
         return True
     except Exception as e:
         logger.error(f"Failed to save message: {e}")
@@ -78,32 +57,30 @@ def save_message(session_id, user_id, role, message_text,
 def get_session_history(session_id, user_id):
     """Return all messages for a session filtered by user_id."""
     try:
-        collection = _get_collection()
-        if collection is None:
+        db = _get_db()
+        if db is None:
             return []
 
-        results = collection.get(
-            where={"$and": [
-                {"session_id": session_id},
-                {"user_id": user_id}
-            ]},
-            include=["documents", "metadatas"]
+        query = (
+            db.collection(MESSAGES_COLLECTION)
+            .where("session_id", "==", session_id)
+            .where("user_id", "==", user_id)
         )
+        docs = list(query.stream())
 
-        if not results or not results.get("ids"):
+        if not docs:
             return []
 
         messages = []
-        for i, doc_id in enumerate(results["ids"]):
-            meta = results["metadatas"][i]
-            doc = results["documents"][i]
+        for doc in docs:
+            data = doc.to_dict()
             messages.append({
-                "id": doc_id,
-                "role": meta.get("role", "user"),
-                "content": doc,
-                "timestamp": meta.get("timestamp", ""),
-                "sources": _parse_sources(meta.get("sources", "[]")),
-                "confidence": meta.get("confidence", ""),
+                "id": doc.id,
+                "role": data.get("role", "user"),
+                "content": data.get("content", ""),
+                "timestamp": data.get("timestamp", ""),
+                "sources": _parse_sources(data.get("sources", "[]")),
+                "confidence": data.get("confidence", ""),
             })
 
         messages.sort(key=lambda m: m["timestamp"])
@@ -124,39 +101,36 @@ def _parse_sources(sources_str):
 
 
 def get_memory_context(session_id, user_id, query):
-    """Semantic search for top 5 relevant past messages for this user."""
+    """Get recent conversation context from this session.
+    
+    Uses last 5 messages instead of semantic search since Firestore
+    does not support vector similarity queries natively.
+    """
     try:
-        collection = _get_collection()
-        if collection is None:
+        db = _get_db()
+        if db is None:
             return ""
 
-        count = collection.count()
-        if count == 0:
-            return ""
-
-        results = collection.query(
-            query_texts=[query],
-            where={"$and": [
-                {"session_id": session_id},
-                {"user_id": user_id}
-            ]},
-            n_results=min(5, count),
-            include=["documents", "metadatas"]
+        q = (
+            db.collection(MESSAGES_COLLECTION)
+            .where("session_id", "==", session_id)
+            .where("user_id", "==", user_id)
         )
-
-        if not results or not results.get("documents"):
-            return ""
-
-        docs = results["documents"][0] if results["documents"] else []
-        metas = results["metadatas"][0] if results["metadatas"] else []
+        docs = list(q.stream())
 
         if not docs:
             return ""
 
+        # Sort by timestamp and take last 5 for context
+        docs.sort(key=lambda d: d.to_dict().get("timestamp", ""))
+        recent = docs[-5:]
+
         context_parts = []
-        for i, doc in enumerate(docs):
-            role = metas[i].get("role", "unknown") if i < len(metas) else "unknown"
-            context_parts.append(f"[{role}]: {doc}")
+        for doc in recent:
+            data = doc.to_dict()
+            role = data.get("role", "unknown")
+            content = data.get("content", "")
+            context_parts.append(f"[{role}]: {content}")
 
         return "\n".join(context_parts)
     except Exception as e:
@@ -165,27 +139,25 @@ def get_memory_context(session_id, user_id, query):
 
 
 def get_all_sessions(user_id):
-    """Return all sessions for a specific user only."""
+    """Return all sessions for a specific user with preview text."""
     try:
-        collection = _get_collection()
-        if collection is None:
+        db = _get_db()
+        if db is None:
             return []
 
-        all_data = collection.get(
-            where={"user_id": user_id},
-            include=["documents", "metadatas"]
+        query = (
+            db.collection(MESSAGES_COLLECTION)
+            .where("user_id", "==", user_id)
         )
-
-        if not all_data or not all_data.get("ids"):
-            return []
+        docs = query.stream()
 
         session_map = {}
-        for i, doc_id in enumerate(all_data["ids"]):
-            meta = all_data["metadatas"][i]
-            doc = all_data["documents"][i]
-            sid = meta.get("session_id", "")
-            timestamp = meta.get("timestamp", "")
-            role = meta.get("role", "user")
+        for doc in docs:
+            data = doc.to_dict()
+            sid = data.get("session_id", "")
+            timestamp = data.get("timestamp", "")
+            role = data.get("role", "user")
+            content = data.get("content", "")
 
             if sid not in session_map:
                 session_map[sid] = {
@@ -194,10 +166,11 @@ def get_all_sessions(user_id):
                     "timestamp": "",
                 }
 
+            # Use the earliest user message as session preview
             if role == "user":
                 existing_ts = session_map[sid]["timestamp"]
                 if not existing_ts or timestamp < existing_ts:
-                    preview = doc[:40] if doc else "New chat"
+                    preview = content[:40] if content else "New chat"
                     session_map[sid]["preview"] = preview
                     session_map[sid]["timestamp"] = timestamp
 

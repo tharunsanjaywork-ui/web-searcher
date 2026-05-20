@@ -23,3 +23,9 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Firebase credentials (NEVER commit this)
+*firebase-service-account*.json
+firebase-service-account.json
+firebase-service-account.json.json
+
