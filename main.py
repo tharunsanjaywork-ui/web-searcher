@@ -20,8 +20,31 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from memory import initialize_firebase
-initialize_firebase()
+# --- Startup Diagnostics ---
+print("=================== SEARCHMIND STARTUP DIAGNOSTICS ===================")
+secret_key = os.getenv("SECRET_KEY", "")
+print(f"SECRET_KEY status: {'CONFIGURED' if secret_key else 'MISSING'}, length: {len(secret_key)}")
+
+firebase_json = os.getenv("FIREBASE_CREDENTIALS_JSON", "")
+print(f"FIREBASE_CREDENTIALS_JSON status: {'CONFIGURED' if firebase_json else 'MISSING'}, length: {len(firebase_json)}")
+
+tavily_key = os.getenv("TAVILY_API_KEY", "")
+print(f"TAVILY_API_KEY status: {'CONFIGURED' if tavily_key else 'MISSING'}")
+
+nvidia_key = os.getenv("NVIDIA_API_KEY", "")
+print(f"NVIDIA_API_KEY status: {'CONFIGURED' if nvidia_key else 'MISSING'}")
+print("======================================================================")
+
+try:
+    from memory import initialize_firebase
+    initialize_firebase()
+except Exception as startup_err:
+    print("=================== STARTUP CRITICAL ERROR ===================")
+    print(f"Firebase initialization failed: {startup_err}")
+    import traceback
+    traceback.print_exc()
+    print("===============================================================")
+    raise startup_err
 
 app = FastAPI(title="SearchMind", version="1.0.0")
 
