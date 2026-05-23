@@ -6,6 +6,7 @@ Uses Tavily for web search and DeepSeek v4 Pro (via NVIDIA) for LLM calls.
 
 import os
 import logging
+import asyncio
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -39,7 +40,7 @@ async def _llm_call(prompt, temperature=0.3):
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
         top_p=0.95,
-        max_tokens=4096,
+        max_tokens=500,
         extra_body={"chat_template_kwargs": {"thinking": False}},
     )
     return response.choices[0].message.content
@@ -117,7 +118,7 @@ async def search_agent(query):
             raise Exception("TAVILY_API_KEY is not set")
 
         search_tool = TavilySearchResults(
-            max_results=5,
+            max_results=3,
             tavily_api_key=TAVILY_API_KEY
         )
         raw_results = await search_tool.ainvoke({"query": query})
@@ -205,7 +206,7 @@ def _format_search_results(results):
     for i, r in enumerate(results, 1):
         title = r.get("title", "Untitled")
         url = r.get("url", "")
-        content = r.get("content", "")
+        content = r.get("content", "")[:1000]
         parts.append(f"[{i}] {title}\nURL: {url}\n{content}")
 
     return "\n\n".join(parts)
@@ -291,81 +292,98 @@ def _fallback_validation(summary):
 
 # --- Pipeline Orchestrator ---
 
+async def _run_search_flow(message, session_id, user_id):
+    """Run reformulation and web search sequentially."""
+    try:
+        search_query = await reformulate_query(message, session_id, user_id)
+        search_results = await search_agent(search_query)
+        return search_query, search_results
+    except Exception as e:
+        logger.error(f"Search flow failed: {e}")
+        raise e
+
+
+def _handle_empty_results(message, session_id, user_id, debug):
+    """Handle assistant response when Tavily search returns no results."""
+    fallback_msg = "No web results found for this query."
+    save_message(session_id, user_id, "user", message)
+    save_message(session_id, user_id, "assistant", fallback_msg,
+                 sources=[], confidence="low")
+    response = {
+        "summary": fallback_msg,
+        "sources": [],
+        "confidence": "low",
+        "session_id": session_id,
+    }
+    if debug:
+        response["debug"] = {
+            "tavily_results": [],
+            "summarizer_output": fallback_msg,
+            "validator_output": {
+                "summary": fallback_msg,
+                "confidence": "low",
+                "reason": "No search results returned from Tavily."
+            }
+        }
+    return response
+
+
+def _save_and_format_response(message, session_id, user_id, search_results, summary, validation, debug):
+    """Save assistant message to Firestore and format the pipeline output response."""
+    source_list = [
+        {"title": r.get("title", "Untitled"), "url": r.get("url", "")}
+        for r in search_results
+    ]
+    save_message(session_id, user_id, "user", message)
+    save_message(
+        session_id, user_id, "assistant",
+        validation.get("validated_summary") or summary,
+        sources=source_list,
+        confidence=validation.get("confidence") or "medium"
+    )
+    response = {
+        "summary": validation.get("validated_summary") or summary,
+        "sources": source_list,
+        "confidence": validation.get("confidence") or "medium",
+        "session_id": session_id,
+    }
+    if debug:
+        response["debug"] = {
+            "tavily_results": search_results or [],
+            "summarizer_output": summary or "No output",
+            "validator_output": {
+                "summary": validation.get("validated_summary") or summary or "",
+                "confidence": validation.get("confidence") or "medium",
+                "reason": validation.get("reason") or "Validation completed successfully"
+            }
+        }
+    return response
+
+
 async def run_pipeline(message, session_id, user_id, debug: bool = False):
     """Orchestrate the full pipeline with query reformulation and optional debug tracing."""
     try:
-        # 1. Get memory context from Firestore
-        memory_context = get_memory_context(session_id, user_id, message)
+        # 1. Fetch memory and run search flow in parallel
+        memory_task = asyncio.to_thread(get_memory_context, session_id, user_id, message)
+        flow_task = _run_search_flow(message, session_id, user_id)
+        
+        memory_context, flow_res = await asyncio.gather(memory_task, flow_task)
+        search_query, search_results = flow_res
 
-        # 2. Reformulate query using conversation history
-        search_query = await reformulate_query(message, session_id, user_id)
-
-        # 3. Run search agent with reformulated query
-        search_results = await search_agent(search_query)
-
-        # 4. Handle empty search results
+        # 2. Handle empty search results
         if not search_results:
-            fallback_msg = "No web results found for this query."
-            save_message(session_id, user_id, "user", message)
-            save_message(session_id, user_id, "assistant", fallback_msg,
-                         sources=[], confidence="low")
-            response = {
-                "summary": fallback_msg,
-                "sources": [],
-                "confidence": "low",
-                "session_id": session_id,
-            }
-            if debug:
-                response["debug"] = {
-                    "tavily_results": [],
-                    "summarizer_output": fallback_msg,
-                    "validator_output": {
-                        "summary": fallback_msg,
-                        "confidence": "low",
-                        "reason": "No search results returned from Tavily."
-                    }
-                }
-            return response
+            return _handle_empty_results(message, session_id, user_id, debug)
 
-        # 5. Run summarizer with both original message and reformulated query
+        # 3. Run summarizer and validator
         summary = await summarizer_agent(
             search_query, message, search_results, memory_context
         )
-
-        # 6. Run validator agent
         validation = await validator_agent(search_query, summary)
 
-        # 7. Save to Firestore
-        source_list = [
-            {"title": r["title"], "url": r["url"]}
-            for r in search_results
-        ]
-        save_message(session_id, user_id, "user", message)
-        save_message(
-            session_id, user_id, "assistant",
-            validation["validated_summary"],
-            sources=source_list,
-            confidence=validation["confidence"]
+        # 4. Save assistant response and return output
+        return _save_and_format_response(
+            message, session_id, user_id, search_results, summary, validation, debug
         )
-
-        # 8. Return response with conditional debug data
-        response = {
-            "summary": validation["validated_summary"],
-            "sources": source_list,
-            "confidence": validation["confidence"],
-            "session_id": session_id,
-        }
-        if debug:
-            response["debug"] = {
-                "tavily_results": search_results,
-                "summarizer_output": summary,
-                "validator_output": {
-                    "summary": validation["validated_summary"],
-                    "confidence": validation["confidence"],
-                    "reason": validation.get("reason", "Validation completed successfully")
-                }
-            }
-        return response
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
         raise Exception(f"Pipeline error: {e}")

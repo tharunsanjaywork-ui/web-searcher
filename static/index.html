@@ -1051,6 +1051,57 @@ async function startNewChat() {
 }
 
 // --- Send Message ---
+function initSendingState(text) {
+    isLoading = true;
+    sendBtn.disabled = true;
+    messageInput.value = '';
+    messageInput.style.height = 'auto';
+    showChatThread();
+    appendUserBubble(text);
+    scrollToBottom();
+    showTypingIndicator();
+}
+
+function handleDebugPreSend() {
+    if (!debugModeEnabled) return null;
+    openDebugPanel();
+    clearDebugPanel();
+    appendDebug("🔍 Initializing pipeline...\n");
+    appendDebug("🔍 Fetching Tavily results...\n");
+    const sTimeout = setTimeout(() => {
+        appendDebug("🧠 Generating summary...\n");
+    }, 800);
+    const vTimeout = setTimeout(() => {
+        appendDebug("✅ Validating answer...\n");
+    }, 1600);
+    return { sTimeout, vTimeout };
+}
+
+function handleDebugPostSend(resp, timeouts) {
+    if (timeouts) {
+        clearTimeout(timeouts.sTimeout);
+        clearTimeout(timeouts.vTimeout);
+    }
+    if (resp && resp.data && resp.data.debug) {
+        const dbg = resp.data.debug;
+        appendDebug("\n=== TAVILY RESULTS ===\n");
+        renderTavily(dbg.tavily_results);
+        appendDebug("\n=== SUMMARIZER OUTPUT ===\n");
+        appendDebug((dbg.summarizer_output || "No output") + "\n");
+        appendDebug("\n=== VALIDATOR OUTPUT ===\n");
+        appendDebug(formatValidator(dbg.validator_output) + "\n");
+    } else if (debugModeEnabled) {
+        appendDebug("\n⚠️ No debug data received\n");
+    }
+}
+
+function finalizeSendingState() {
+    isLoading = false;
+    sendBtn.disabled = false;
+    scrollToBottom();
+    loadHistory();
+}
+
 async function sendMessage() {
     const text = messageInput.value.trim();
     if (!text || isLoading) return;
@@ -1059,23 +1110,8 @@ async function sendMessage() {
         return;
     }
 
-    isLoading = true;
-    sendBtn.disabled = true;
-    messageInput.value = '';
-    messageInput.style.height = 'auto';
-
-    showChatThread();
-    appendUserBubble(text);
-    scrollToBottom();
-    showTypingIndicator();
-
-    // If debug mode is on, open panel and show initializing state
-    if (debugModeEnabled) {
-        openDebugPanel();
-        clearDebugContent();
-        appendDebug('🔍 Initializing pipeline...');
-        appendDebug('⏳ Waiting for Tavily results...\n');
-    }
+    initSendingState(text);
+    const timeouts = handleDebugPreSend();
 
     try {
         const resp = await apiPost('/api/chat', { 
@@ -1086,27 +1122,26 @@ async function sendMessage() {
         removeTypingIndicator();
         if (resp.success && resp.data) {
             renderResponseCard(resp.data);
-            if (resp.data.debug) {
-                streamDebugData(resp.data.debug);
-            }
+            handleDebugPostSend(resp, timeouts);
         } else {
             showErrorCard(resp.error || 'Something went wrong.');
-            if (debugModeEnabled) {
-                appendDebug('\n❌ Pipeline failed: ' + (resp.error || 'Unknown error'));
+            if (timeouts) {
+                clearTimeout(timeouts.sTimeout);
+                clearTimeout(timeouts.vTimeout);
             }
+            if (debugModeEnabled) appendDebug('\n❌ Pipeline failed: ' + (resp.error || 'Unknown error') + '\n');
         }
     } catch (e) {
         removeTypingIndicator();
         showErrorCard('Connection lost. Check your internet.');
-        if (debugModeEnabled) {
-            appendDebug('\n❌ Connection error — pipeline aborted.');
+        if (timeouts) {
+            clearTimeout(timeouts.sTimeout);
+            clearTimeout(timeouts.vTimeout);
         }
+        if (debugModeEnabled) appendDebug('\n❌ Connection error — pipeline aborted.\n');
     }
 
-    isLoading = false;
-    sendBtn.disabled = false;
-    scrollToBottom();
-    loadHistory();
+    finalizeSendingState();
 }
 
 // --- Debug Panel Helpers ---
@@ -1123,91 +1158,34 @@ function openDebugPanel() {
 
 function clearDebugContent() {
     const container = document.getElementById('debugContent');
-    container.innerHTML = '';
+    if (container) container.innerHTML = '';
+}
+
+function clearDebugPanel() {
+    clearDebugContent();
 }
 
 function appendDebug(text) {
-    const container = document.getElementById('debugContent');
-    const line = document.createElement('div');
-    line.style.cssText = 'margin-bottom:2px;animation:fadeSlideUp 0.2s ease;';
-    line.innerHTML = text;
-    container.appendChild(line);
-    container.scrollTop = container.scrollHeight;
+    const panel = document.getElementById('debugContent') || document.getElementById('debugPanel');
+    if (panel) {
+        panel.textContent += text;
+        panel.scrollTop = panel.scrollHeight;
+    }
 }
 
-function appendDebugHtml(html) {
-    const container = document.getElementById('debugContent');
-    const block = document.createElement('div');
-    block.style.cssText = 'animation:fadeSlideUp 0.25s ease;';
-    block.innerHTML = html;
-    container.appendChild(block);
-    container.scrollTop = container.scrollHeight;
-}
-
-function streamDebugData(debugData) {
-    if (!debugData) {
-        appendDebug('❌ No debug data received.');
+function renderTavily(results) {
+    if (!results || results.length === 0) {
+        appendDebug("No Tavily results found.\n");
         return;
     }
+    results.forEach((r, idx) => {
+        appendDebug(`[${idx + 1}] ${r.title || 'Untitled'}\nURL: ${r.url || ''}\nContent: ${(r.content || '').substring(0, 300)}...\n\n`);
+    });
+}
 
-    const delay = 300;
-    let step = 0;
-
-    // Step 1: Tavily results received
-    setTimeout(() => {
-        appendDebug('✅ Tavily results received!');
-        appendDebugHtml('<span style="color:#10b981;font-weight:bold;display:block;margin:8px 0 6px;">═══ TAVILY SEARCH RESULTS ═══</span>');
-        const results = debugData.tavily_results || [];
-        if (results.length === 0) {
-            appendDebug('⚠️ No search results fetched.');
-        } else {
-            results.forEach((r, idx) => {
-                let block = '';
-                block += `<span style="color:var(--accent-2);font-weight:bold;">[${idx + 1}] </span>`;
-                block += `<span style="color:var(--text-primary);font-weight:500;">${escapeHtml(r.title)}</span><br>`;
-                block += `<span style="color:var(--text-muted);font-size:11px;">    ↳ </span><a href="${escapeHtml(r.url)}" target="_blank" style="color:var(--accent);text-decoration:underline;font-size:11px;">${escapeHtml(r.url)}</a><br>`;
-                block += `<span style="color:var(--text-secondary);font-size:11px;">${escapeHtml((r.content || '').substring(0, 200))}${(r.content || '').length > 200 ? '...' : ''}</span>`;
-                appendDebugHtml(`<div style="margin:4px 0 10px;padding:6px 8px;border-left:2px solid rgba(139,92,246,0.3);">${block}</div>`);
-            });
-        }
-        appendDebug(`\n📊 Total results: ${(debugData.tavily_results || []).length}`);
-    }, delay * ++step);
-
-    // Step 2: Summarizer processing
-    setTimeout(() => {
-        appendDebug('\n📝 Sending to DeepSeek Summarizer...');
-    }, delay * ++step);
-
-    // Step 3: Summarizer output
-    setTimeout(() => {
-        appendDebug('✅ Summarizer response received!');
-        appendDebugHtml('<span style="color:#f59e0b;font-weight:bold;display:block;margin:8px 0 6px;">═══ SUMMARIZER RAW OUTPUT ═══</span>');
-        const summaryText = debugData.summarizer_output || 'No summary generated.';
-        appendDebugHtml(`<div style="margin:4px 0 10px;padding:8px 10px;background:rgba(245,158,11,0.05);border:1px solid rgba(245,158,11,0.15);border-radius:6px;color:var(--text-primary);font-size:11px;line-height:1.7;white-space:pre-wrap;">${escapeHtml(summaryText)}</div>`);
-    }, delay * ++step);
-
-    // Step 4: Validator processing
-    setTimeout(() => {
-        appendDebug('\n🔎 Sending to DeepSeek Validator...');
-    }, delay * ++step);
-
-    // Step 5: Validator output
-    setTimeout(() => {
-        appendDebug('✅ Validator response received!');
-        appendDebugHtml('<span style="color:#ef4444;font-weight:bold;display:block;margin:8px 0 6px;">═══ VALIDATOR OUTPUT ═══</span>');
-        const val = debugData.validator_output || {};
-        const confColor = val.confidence === 'high' ? 'var(--success)' : val.confidence === 'low' ? 'var(--danger)' : 'var(--warning)';
-        let vHtml = '';
-        vHtml += `<div style="margin-bottom:6px;"><span style="color:var(--accent-2);font-weight:bold;">Validated Summary: </span><span style="color:var(--text-primary);font-size:11px;">${escapeHtml(val.summary || '')}</span></div>`;
-        vHtml += `<div style="margin-bottom:6px;"><span style="color:var(--accent-2);font-weight:bold;">Confidence: </span><span style="text-transform:uppercase;font-weight:700;color:${confColor};">${escapeHtml(val.confidence || 'unknown')}</span></div>`;
-        vHtml += `<div><span style="color:var(--accent-2);font-weight:bold;">Reason: </span><span style="color:var(--text-secondary);font-size:11px;">${escapeHtml(val.reason || '')}</span></div>`;
-        appendDebugHtml(`<div style="margin:4px 0 10px;padding:8px 10px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.15);border-radius:6px;">${vHtml}</div>`);
-    }, delay * ++step);
-
-    // Step 6: Done
-    setTimeout(() => {
-        appendDebugHtml('<div style="margin-top:12px;padding:8px 12px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius:6px;text-align:center;"><span style="color:var(--success);font-weight:600;">✅ Pipeline Complete</span></div>');
-    }, delay * ++step);
+function formatValidator(val) {
+    if (!val) return "No validator output.\n";
+    return `Summary: ${val.summary || ''}\nConfidence: ${val.confidence || ''}\nReason: ${val.reason || ''}\n`;
 }
 
 function useSuggestion(text) { messageInput.value = text; sendMessage(); }
