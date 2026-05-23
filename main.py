@@ -166,6 +166,7 @@ async def chat(request: Request):
         body = await request.json()
         message = body.get("message", "").strip()
         session_id = body.get("session_id", "").strip()
+        debug_flag = bool(body.get("debug", False))
 
         if not message:
             return error_response("Message is required", 400)
@@ -175,7 +176,7 @@ async def chat(request: Request):
             return error_response("session_id is required", 400)
 
         from agents import run_pipeline
-        result = await run_pipeline(message, session_id, user_id)
+        result = await run_pipeline(message, session_id, user_id, debug=debug_flag)
         return success_response(result)
     except Exception as e:
         logger.error(f"Chat error: {e}")

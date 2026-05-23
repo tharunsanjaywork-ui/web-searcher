@@ -291,10 +291,10 @@ def _fallback_validation(summary):
 
 # --- Pipeline Orchestrator ---
 
-async def run_pipeline(message, session_id, user_id):
-    """Orchestrate the full pipeline with query reformulation."""
+async def run_pipeline(message, session_id, user_id, debug: bool = False):
+    """Orchestrate the full pipeline with query reformulation and optional debug tracing."""
     try:
-        # 1. Get memory context from ChromaDB
+        # 1. Get memory context from Firestore
         memory_context = get_memory_context(session_id, user_id, message)
 
         # 2. Reformulate query using conversation history
@@ -309,12 +309,23 @@ async def run_pipeline(message, session_id, user_id):
             save_message(session_id, user_id, "user", message)
             save_message(session_id, user_id, "assistant", fallback_msg,
                          sources=[], confidence="low")
-            return {
+            response = {
                 "summary": fallback_msg,
                 "sources": [],
                 "confidence": "low",
                 "session_id": session_id,
             }
+            if debug:
+                response["debug"] = {
+                    "tavily_results": [],
+                    "summarizer_output": fallback_msg,
+                    "validator_output": {
+                        "summary": fallback_msg,
+                        "confidence": "low",
+                        "reason": "No search results returned from Tavily."
+                    }
+                }
+            return response
 
         # 5. Run summarizer with both original message and reformulated query
         summary = await summarizer_agent(
@@ -324,7 +335,7 @@ async def run_pipeline(message, session_id, user_id):
         # 6. Run validator agent
         validation = await validator_agent(search_query, summary)
 
-        # 7. Save to ChromaDB
+        # 7. Save to Firestore
         source_list = [
             {"title": r["title"], "url": r["url"]}
             for r in search_results
@@ -337,13 +348,24 @@ async def run_pipeline(message, session_id, user_id):
             confidence=validation["confidence"]
         )
 
-        # 8. Return response
-        return {
+        # 8. Return response with conditional debug data
+        response = {
             "summary": validation["validated_summary"],
             "sources": source_list,
             "confidence": validation["confidence"],
             "session_id": session_id,
         }
+        if debug:
+            response["debug"] = {
+                "tavily_results": search_results,
+                "summarizer_output": summary,
+                "validator_output": {
+                    "summary": validation["validated_summary"],
+                    "confidence": validation["confidence"],
+                    "reason": validation.get("reason", "Validation completed successfully")
+                }
+            }
+        return response
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
         raise Exception(f"Pipeline error: {e}")
