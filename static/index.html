@@ -874,18 +874,26 @@ const newChatBtn = document.getElementById('newChatBtn');
 function toggleDebugPanel() {
     const panel = document.getElementById('debugDrawer');
     const btn = document.getElementById('debugToggleBtn');
-    debugModeEnabled = !debugModeEnabled;
     
-    if (debugModeEnabled) {
-        panel.style.right = '0px';
-        btn.style.borderColor = 'var(--accent)';
-        btn.style.background = 'rgba(139, 92, 246, 0.15)';
-        btn.querySelector('span').style.color = 'var(--accent-2)';
+    // Explicitly check current visual state of the drawer
+    const isOpen = panel && panel.style.right === '0px';
+    
+    if (!isOpen) {
+        debugModeEnabled = true;
+        if (panel) panel.style.right = '0px';
+        if (btn) {
+            btn.style.borderColor = 'var(--accent)';
+            btn.style.background = 'rgba(139, 92, 246, 0.15)';
+            btn.querySelector('span').style.color = 'var(--accent-2)';
+        }
     } else {
-        panel.style.right = '-450px';
-        btn.style.borderColor = 'var(--border-glass)';
-        btn.style.background = 'var(--bg-glass)';
-        btn.querySelector('span').style.color = 'var(--text-primary)';
+        debugModeEnabled = false;
+        if (panel) panel.style.right = '-450px';
+        if (btn) {
+            btn.style.borderColor = 'var(--border-glass)';
+            btn.style.background = 'var(--bg-glass)';
+            btn.querySelector('span').style.color = 'var(--text-primary)';
+        }
     }
 }
 
@@ -1063,9 +1071,10 @@ function initSendingState(text) {
 }
 
 function handleDebugPreSend() {
-    if (!debugModeEnabled) return null;
     clearDebugPanel();
-    openDebugPanel();
+    if (debugModeEnabled) {
+        openDebugPanel();
+    }
     appendDebug("🔍 Starting request...\n");
     const t1 = setTimeout(() => {
         appendDebug("🔍 Fetching Tavily results...\n");
@@ -1093,7 +1102,7 @@ function handleDebugPostSend(resp, timeouts) {
         appendDebug((dbg.summarizer_output || "No output") + "\n");
         appendDebug("\n=== VALIDATOR OUTPUT ===\n");
         appendDebug(formatValidator(dbg.validator_output) + "\n");
-    } else if (debugModeEnabled) {
+    } else {
         appendDebug("\n⚠️ No debug data received\n");
     }
 }
@@ -1120,7 +1129,7 @@ async function sendMessage() {
         const resp = await apiPost('/api/chat', { 
             message: text, 
             session_id: currentSessionId,
-            debug: debugModeEnabled
+            debug: true
         });
         removeTypingIndicator();
         if (resp.success && resp.data) {
@@ -1133,7 +1142,7 @@ async function sendMessage() {
                 clearTimeout(timeouts.t2);
                 clearTimeout(timeouts.t3);
             }
-            if (debugModeEnabled) appendDebug('\n❌ Pipeline failed: ' + (resp.error || 'Unknown error') + '\n');
+            appendDebug('\n❌ Pipeline failed: ' + (resp.error || 'Unknown error') + '\n');
         }
     } catch (e) {
         removeTypingIndicator();
@@ -1143,7 +1152,7 @@ async function sendMessage() {
             clearTimeout(timeouts.t2);
             clearTimeout(timeouts.t3);
         }
-        if (debugModeEnabled) appendDebug('\n❌ Connection error — pipeline aborted.\n');
+        appendDebug('\n❌ Connection error — pipeline aborted.\n');
     }
 
     finalizeSendingState();
